@@ -20,6 +20,8 @@ type Server struct {
 	Port int
 	//当前的server的消息管理模块，用来绑定msgId和对应的处理业务API关系
 	MsgHandler ziface.IMsgHandler
+	// 该server的链接管理器
+	ConnMgr ziface.IConnManager
 
 }
 
@@ -44,6 +46,9 @@ func (s *Server) Start(){
 		utils.GlobalObject.MaxPackageSize)
 
 	go func() {
+		//0 开启消息队列及worker工作池
+		s.MsgHandler.StartWorkerPool()
+
 		//1 获取一个TCP的addr
 		addr, err := net.ResolveTCPAddr(s.IPVersion, fmt.Sprintf("%s:%d", s.IP, s.Port))
 		if err != nil {
@@ -71,8 +76,15 @@ func (s *Server) Start(){
 				continue
 			}
 
+			// 设置最大链接个数的判断 如果超过最大链接数量 则关闭此链接
+			if s.ConnMgr.Len() >= utils.GlobalObject.MaxConn{
+				// TODO 给客户端响应一个超出最大连接的错误包
+				conn.Close()
+				continue
+			}
+
 			//将处理新连接的业务方法和conn进行绑定 得到我们的链接模块
-			dealConn := NewCoinnection(conn, cid, s.MsgHandler)
+			dealConn := NewCoinnection(s, conn, cid, s.MsgHandler)
 			cid ++
 
 			//启动当前的链接业务处理
@@ -81,10 +93,14 @@ func (s *Server) Start(){
 		}
 	}()
 }
+
 // 停止服务器
 func (s *Server) Stop(){
-	//TODO 将一些服务器资源，状态或一些开辟的链接信息 进行停止或者回收
+	//将一些服务器资源，状态或一些开辟的链接信息 进行停止或者回收
+	fmt.Println("[STOP] Zinx server name ", s.Name)
+	s.ConnMgr.ClearConn()
 }
+
 // 运行服务器
 func (s *Server) Serve(){
 	//启动derver的服务功能
@@ -102,6 +118,10 @@ func (s *Server) AddRouter(msgId uint32, router ziface.IRouter){
 	fmt.Println("Add Router Succ!")
 }
 
+func (s *Server) GetConnMgr() ziface.IConnManager{
+	return s.ConnMgr
+}
+
 //初始化Server模块的方法
 func NewServer(name string) ziface.IServer{
 	s := &Server{
@@ -110,6 +130,7 @@ func NewServer(name string) ziface.IServer{
 		IP: utils.GlobalObject.Host,
 		Port: utils.GlobalObject.TcpPort,
 		MsgHandler: NewMsgHandler(),
+		ConnMgr: NewConnManager(),
 	}
 	return s
 }
