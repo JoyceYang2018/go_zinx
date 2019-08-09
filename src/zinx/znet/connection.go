@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"zinx/utils"
 	"zinx/ziface"
 )
@@ -34,6 +35,12 @@ type Connection struct {
 
 	//消息的管理MsgId和对应的处理业务API关系
 	MsgHandler ziface.IMsgHandler
+
+	// 链接属性集合
+	property map[string]interface{}
+
+	// 保护链接属性的锁
+	propertyLock sync.RWMutex
 }
 
 //初始化链接模块的方法
@@ -46,6 +53,7 @@ func NewCoinnection(server ziface.IServer, conn *net.TCPConn, connID uint32, han
 		isClose:false,
 		msgChan: make(chan []byte),
 		ExitChan: make(chan bool, 1),
+		property: make(map[string]interface{}),
 	}
 
 	// 将conn加入到ConnManager中
@@ -139,6 +147,9 @@ func (c *Connection) Start() {
 	go c.StartReader()
 	//启动从当前链接写数据的业务
 	go c.StartWriter()
+
+	// 按照开发者传递进来的 创建链接之后需要调用的处理业务 执行对应的hook方法
+	c.TcpServer.CallOnConnStart(c)
 }
 
 //停止链接 结束当前链接的工作
@@ -150,6 +161,9 @@ func (c *Connection) Stop() {
 		return
 	}
 	c.isClose = true
+
+	// 调用开发者注册的 销毁链接之前 需要执行的业务Hook函数
+	c.TcpServer.CallOnConnStop(c)
 
 	//关闭socket链接
 	c.Conn.Close()
@@ -195,4 +209,35 @@ func (c * Connection) SendMsg(msgId uint32, data []byte) error {
 	c.msgChan <- binaryMsg
 
 	return nil
+}
+
+// 设置链接属性
+func(c *Connection) SetProperty(key string, value interface{}){
+	c.propertyLock.Lock()
+	defer c.propertyLock.Unlock()
+
+	// 添加一个链接属性
+	c.property[key] = value
+}
+
+// 获取链接属性
+func(c *Connection) GetProperty(key string) (interface{}, error){
+	c.propertyLock.RLock()
+	defer c.propertyLock.RUnlock()
+
+	// 读取属性
+	if value, ok := c.property[key];ok{
+		return value, nil
+	}else{
+		return nil, errors.New("no property found")
+	}
+}
+
+// 移除链接属性
+func(c *Connection) RemoveProperty(key string){
+	c.propertyLock.Lock()
+	defer c.propertyLock.Unlock()
+
+	// 删除属性
+	delete(c.property, key)
 }
